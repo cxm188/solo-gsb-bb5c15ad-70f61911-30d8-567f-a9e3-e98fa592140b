@@ -4,6 +4,8 @@ POST /api/traces                      提交光线与界面序列，返回追迹
 GET  /api/traces                      列出所有已保存的追迹（摘要）
 GET  /api/traces/{trace_id}           按编号查询完整追迹（含各段交点与方向）
 GET  /api/traces/{trace_id}/segments/{seg_index}  按编号查询某一段
+POST /api/beam-evaluations            以中心方向为轴对称采样多条光线，返回每条光线
+                                      的发射角、追迹状态、观察线交点及质心/RMS 半径
 """
 from __future__ import annotations
 
@@ -12,8 +14,20 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 
 from . import db
-from .geometry import trace_ray
-from .schemas import SegmentOut, TraceOut, TraceRequest, TraceSummary
+from .geometry import (
+    centroid_and_rms,
+    observation_intersection,
+    sample_directions,
+    trace_ray,
+)
+from .schemas import (
+    BeamEvaluationOut,
+    BeamRequest,
+    SegmentOut,
+    TraceOut,
+    TraceRequest,
+    TraceSummary,
+)
 
 
 @asynccontextmanager
@@ -76,3 +90,59 @@ def get_segment(trace_id: int, seg_index: int) -> dict:
             status_code=404, detail=f"追迹 {trace_id} 的第 {seg_index} 段不存在"
         )
     return segment
+
+
+@app.post("/api/beam-evaluations", response_model=BeamEvaluationOut)
+def evaluate_beam(req: BeamRequest) -> dict:
+    """以中心方向为 0° 在 [-a, +a] 内等间距旋转采样，逐条追迹并评估观察线光斑。
+
+    仅对追迹完成（status=completed）且与观察线存在前向交点的光线纳入统计；
+    未完成、与观察线平行或交点在光线反方向时 observation_point 为 null。
+    """
+    interfaces = [
+        (itf.point.as_tuple(), itf.normal.as_tuple(), itf.n_next)
+        for itf in req.interfaces
+    ]
+    start = req.start.as_tuple()
+
+    rays_out: list[dict] = []
+    hit_points: list[tuple[float, float]] = []
+    for angle, direction in sample_directions(
+        req.center_direction.as_tuple(), req.half_angle_deg, req.sample_count
+    ):
+        segments, status, reason = trace_ray(
+            start, direction, req.n_start, interfaces
+        )
+        observation_point = None
+        if status == "completed":
+            observation_point = observation_intersection(
+                segments,
+                req.observation_line.point.as_tuple(),
+                req.observation_line.normal.as_tuple(),
+            )
+            if observation_point is not None:
+                hit_points.append(observation_point)
+        rays_out.append(
+            {
+                "emission_angle_deg": angle,
+                "direction": {"x": direction[0], "y": direction[1]},
+                "status": status,
+                "reason": reason,
+                "observation_point": (
+                    None
+                    if observation_point is None
+                    else {"x": observation_point[0], "y": observation_point[1]}
+                ),
+            }
+        )
+
+    stats = centroid_and_rms(hit_points)
+    return {
+        "half_angle_deg": req.half_angle_deg,
+        "sample_count": req.sample_count,
+        "ray_count": len(rays_out),
+        "hit_count": len(hit_points),
+        "centroid": None if stats is None else {"x": stats[0][0], "y": stats[0][1]},
+        "rms_radius": None if stats is None else stats[1],
+        "rays": rays_out,
+    }

@@ -72,3 +72,52 @@ class TraceSummary(BaseModel):
     reason: str | None
     n_start: float
     created_at: str
+
+
+class ObservationLineIn(BaseModel):
+    """观察线：线上一点与法线（法线方向不影响直线位置，仅用于求交方程）。"""
+
+    point: Vec2
+    normal: Vec2
+
+    @field_validator("normal")
+    @classmethod
+    def normal_nonzero(cls, v: Vec2) -> Vec2:
+        if math.hypot(v.x, v.y) < _EPS:
+            raise ValueError("法线不能为零向量")
+        return v
+
+
+class BeamRequest(BaseModel):
+    start: Vec2
+    center_direction: Vec2
+    half_angle_deg: float = Field(gt=0, lt=90, description="对称半角（度），0<a<90")
+    sample_count: int = Field(ge=2, le=101, description="采样数，2～101（含端点）")
+    n_start: float = Field(gt=0, description="起始介质折射率，必须为正")
+    interfaces: list[InterfaceIn] = Field(default_factory=list)
+    observation_line: ObservationLineIn
+
+    @field_validator("center_direction")
+    @classmethod
+    def direction_nonzero(cls, v: Vec2) -> Vec2:
+        if math.hypot(v.x, v.y) < _EPS:
+            raise ValueError("中心方向不能为零向量")
+        return v
+
+
+class BeamRayOut(BaseModel):
+    emission_angle_deg: float
+    direction: Vec2
+    status: str
+    reason: str | None
+    observation_point: Vec2 | None
+
+
+class BeamEvaluationOut(BaseModel):
+    half_angle_deg: float
+    sample_count: int
+    ray_count: int
+    hit_count: int
+    centroid: Vec2 | None
+    rms_radius: float | None
+    rays: list[BeamRayOut]

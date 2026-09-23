@@ -76,6 +76,59 @@ def _refract(
     return (eta * direction[0] + k * normal[0], eta * direction[1] + k * normal[1])
 
 
+def sample_directions(
+    center: tuple[float, float],
+    half_angle_deg: float,
+    sample_count: int,
+) -> list[tuple[float, tuple[float, float]]]:
+    """以中心方向为 0°，在 [-a, +a]（度，含端点）等间距生成 sample_count 个方向。
+
+    返回 [(emission_angle_deg, normalized_direction), ...]，角度正向为数学上的
+    逆时针方向，端点精确取 -a 与 +a。
+    """
+    base = normalize(center)
+    theta0 = math.atan2(base[1], base[0])
+    a = float(half_angle_deg)
+    last = sample_count - 1
+    result: list[tuple[float, tuple[float, float]]] = []
+    for i in range(sample_count):
+        if i == 0:
+            angle = -a
+        elif i == last:
+            angle = a
+        else:
+            angle = -a + 2.0 * a * i / last
+        theta = theta0 + math.radians(angle)
+        result.append((angle, (math.cos(theta), math.sin(theta))))
+    return result
+
+
+def observation_intersection(
+    segments: list[SegmentResult],
+    point: tuple[float, float],
+    normal: tuple[float, float],
+) -> tuple[float, float] | None:
+    """取完成追迹后的出射段（最后一段），求其与观察线的前向交点。
+
+    平行（denom≈0）或交点在光线反方向（t<=0）时返回 None。
+    """
+    final = segments[-1]
+    return _intersect_line(final.origin, final.direction, point, normalize(normal))
+
+
+def centroid_and_rms(
+    points: list[tuple[float, float]],
+) -> tuple[tuple[float, float], float] | None:
+    """点集质心与 RMS 半径（各点到质心距离平方均值的开方）；空集返回 None。"""
+    count = len(points)
+    if count == 0:
+        return None
+    cx = sum(p[0] for p in points) / count
+    cy = sum(p[1] for p in points) / count
+    mean_sq = sum((p[0] - cx) ** 2 + (p[1] - cy) ** 2 for p in points) / count
+    return (cx, cy), math.sqrt(mean_sq)
+
+
 def trace_ray(
     start: tuple[float, float],
     direction: tuple[float, float],
